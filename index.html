@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Race Start Timer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --red: #ff2a1f;
+    --green: #18ff4d;
+    --amber: #ffb020;
+    --grey: #9a9a9a;
+    --mono: ui-monospace, "Roboto Mono", "DejaVu Sans Mono", "Droid Sans Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
+  [hidden] { display: none !important; }
+  html, body {
+    height: 100%; margin: 0; background: #000; color: var(--red);
+    font-family: system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+    overflow: hidden; overscroll-behavior: none; touch-action: manipulation;
+  }
+
+  /* ---------- Status bar (always visible) ---------- */
+  #status {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+    display: flex; align-items: center; gap: 10px;
+    padding: calc(env(safe-area-inset-top, 0px) + 6px) 12px 6px;
+    font-size: 13px;
+  }
+  #status button {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: 0; color: var(--grey); font: inherit;
+    padding: 10px 4px; min-height: 40px;
+  }
+  #status i { width: 9px; height: 9px; border-radius: 50%; background: var(--amber); flex: none; }
+  #status .ok i { background: var(--green); }
+  #status .warn { color: var(--amber); }
+  #fs { margin-left: auto; color: var(--grey); }
+
+  /* ---------- Shared screen layout ---------- */
+  .screen {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    padding: 56px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .btn {
+    font: inherit; font-size: 1.15rem; font-weight: 600; min-height: 60px; padding: 0 18px;
+    border-radius: 14px; border: 2px solid var(--red); background: #000; color: var(--red);
+  }
+  .btn:active { background: #2a0805; }
+  .btn.filled { background: var(--red); color: #000; }
+  .btn.filled:active { background: #ff6a60; }
+  .btn.muted { border-color: #555; color: var(--grey); }
+
+  /* ---------- Setup ---------- */
+  #setup { justify-content: center; gap: 18px; }
+  #setup .lbl { color: var(--grey); font-size: .95rem; text-align: center; margin: 0; }
+  #now { font-family: var(--mono); font-weight: 700; font-size: min(9vw, 9vh); text-align: center; line-height: 1; }
+  .fields { display: flex; align-items: center; justify-content: center; gap: 1.5vw; font-family: var(--mono); font-weight: 700; }
+  .fields input {
+    width: 26vw; max-width: 200px; font: inherit; font-size: min(17vw, 24vh);
+    text-align: center; color: var(--red); background: #000; caret-color: var(--red);
+    border: 2px solid var(--red); border-radius: 12px; padding: .05em 0; -webkit-user-select: text; user-select: text;
+  }
+  .fields input:focus { outline: 3px solid #fff; outline-offset: 2px; }
+  .fields span { font-size: min(12vw, 17vh); }
+  #error { min-height: 1.4em; margin: 0; text-align: center; color: #fff; }
+  .row { display: flex; gap: 12px; }
+  .row .btn { flex: 1; font-size: 1rem; min-height: 52px; }
+  .tip { color: #777; font-size: .85rem; line-height: 1.4; text-align: center; margin: 0; }
+
+  /* ---------- Countdown ---------- */
+  #countdown { justify-content: space-between; }
+  .middle { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; }
+  #target { color: var(--grey); font-size: 1rem; margin-bottom: 1vh; }
+  .time {
+    font-family: var(--mono); font-weight: 700; line-height: 1; white-space: nowrap; text-align: center;
+    color: var(--red); text-shadow: 0 0 .1em rgba(255, 42, 31, .55);
+    font-variant-numeric: tabular-nums;
+  }
+  .time.go, .time.after { color: var(--green); text-shadow: none; }
+  #stop { position: relative; overflow: hidden; min-height: 76px; font-size: 1.1rem; }
+  #stop::after {
+    content: ""; position: absolute; inset: 0; background: rgba(255, 255, 255, .28);
+    transform: scaleX(0); transform-origin: left; transition: transform 0s;
+  }
+  #stop.holding::after { transform: scaleX(1); transition: transform .9s linear; }
+
+  /* ---------- Green start flash ---------- */
+  body.flash { animation: blinkBg .5s steps(1, end) infinite; }
+  body.flash .time { animation: blinkTxt .5s steps(1, end) infinite; }
+  @keyframes blinkBg  { 0% { background: var(--green); } 50% { background: #000; } }
+  @keyframes blinkTxt { 0% { color: #000; } 50% { color: var(--green); } }
+</style>
+</head>
+<body>
+
+<div id="status">
+  <button id="wl" class="warn" type="button"><i></i><span id="wlText">Screen may turn off</span></button>
+  <button id="snd" class="warn" type="button"><i></i><span id="sndText">Sound: tap here</span></button>
+  <button id="fs" type="button" hidden>Fullscreen</button>
+</div>
+
+<main id="setup" class="screen">
+  <p class="lbl">Time now</p>
+  <div id="now">--:--:--</div>
+
+  <p class="lbl" style="margin-top:2vh">Start time (hh:mm:ss)</p>
+  <div class="fields">
+    <input id="h" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off" placeholder="--" aria-label="Hour">
+    <span>:</span>
+    <input id="m" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off" placeholder="--" aria-label="Minute">
+    <span>:</span>
+    <input id="s" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off" placeholder="--" aria-label="Second">
+  </div>
+  <p id="error" role="alert"></p>
+
+  <button id="go" class="btn filled" type="button">Start countdown</button>
+  <div class="row">
+    <button id="testSound" class="btn muted" type="button">Test sound</button>
+  </div>
+  <p class="tip">Chrome menu → “Add to Home screen” gives fullscreen without the address bar and works offline.</p>
+</main>
+
+<main id="countdown" class="screen" hidden>
+  <div class="middle">
+    <div id="target">Start 00:00:00</div>
+    <div id="time" class="time">00:00</div>
+  </div>
+  <button id="stop" class="btn muted" type="button">Hold to cancel</button>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Settings ----------
+  const START_SHOWN_MS = 5000;   // how long "START!" flashes before the count-up begins
+  const BEEP_LAST_SEC  = 5;      // beep during the last 5 seconds
+  const STORE = { last: 'racetimer.last', target: 'racetimer.target' };
+
+  const $ = id => document.getElementById(id);
+  const pad = n => String(n).padStart(2, '0');
+  const clock = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const save = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
+  const load = k => { try { return localStorage.getItem(k); } catch { return null; } };
+
+  let target = null;             // start time as epoch ms; null = not running
+  let lastText = '', lastLength = 0;
+
+  // ---------- Screen switching ----------
+  function showScreen(name) {
+    $('setup').hidden = name !== 'setup';
+    $('countdown').hidden = name !== 'countdown';
+  }
+
+  // ---------- Audio (Web Audio, no external files) ----------
+  let ctx = null, scheduled = new Set(), nodes = [];
+
+  function audioReady() {
+    try {
+      if (!ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        ctx = new AC();
+        ctx.onstatechange = updateStatus;
+      }
+      if (ctx.state !== 'running') ctx.resume().then(updateStatus).catch(() => {});
+    } catch {}
+    updateStatus();
+  }
+
+  function beep(at, duration, freq, vol) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'square';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(vol, at + 0.005);
+    g.gain.setValueAtTime(vol, at + duration - 0.01);
+    g.gain.linearRampToValueAtTime(0, at + duration);
+    o.connect(g).connect(ctx.destination);
+    o.start(at);
+    o.stop(at + duration + 0.02);
+    nodes.push(o);
+    o.onended = () => { nodes = nodes.filter(x => x !== o); };
+  }
+
+  // Beeps are scheduled on the audio clock shortly in advance so they land exactly on the second
+  function scheduleAudio(now) {
+    if (!ctx || ctx.state !== 'running' || target === null) return;
+    const latency = ctx.outputLatency || ctx.baseLatency || 0;
+    for (let n = BEEP_LAST_SEC; n >= 0; n--) {
+      const key = target + ':' + n;
+      const dt = (target - n * 1000) - now;
+      if (dt < -80 || dt > 400 || scheduled.has(key)) continue;
+      scheduled.add(key);
+      const at = Math.max(ctx.currentTime, ctx.currentTime + dt / 1000 - latency);
+      if (n > 0) beep(at, 0.12, 1000, 0.5);   // short beeps
+      else       beep(at, 1.0, 1500, 0.7);    // start gun
+    }
+  }
+
+  function stopAudio() {
+    nodes.forEach(o => { try { o.stop(); } catch {} });
+    nodes = [];
+    scheduled.clear();
+  }
+
+  // ---------- Screen Wake Lock ----------
+  let wakeLock = null;
+  async function keepAwake() {
+    if (!('wakeLock' in navigator)) { updateStatus(); return; }
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; updateStatus(); });
+    } catch { wakeLock = null; }
+    updateStatus();
+  }
+
+  const isFullscreen = () => !!document.fullscreenElement ||
+    matchMedia('(display-mode: fullscreen)').matches || matchMedia('(display-mode: standalone)').matches;
+
+  function updateStatus() {
+    const wlOk = !!wakeLock;
+    $('wl').className = wlOk ? 'ok' : 'warn';
+    $('wlText').textContent = !('wakeLock' in navigator) ? 'Wake lock not supported'
+                            : wlOk ? 'Screen stays on' : 'Screen may turn off';
+    const sndOk = ctx && ctx.state === 'running';
+    $('snd').className = sndOk ? 'ok' : 'warn';
+    $('sndText').textContent = sndOk ? 'Sound ready' : 'Sound: tap here';
+    $('fs').hidden = isFullscreen() || !document.documentElement.requestFullscreen;
+  }
+
+  // ---------- Fullscreen ----------
+  async function goFullscreen() {
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen)
+        await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    } catch {}
+    updateStatus();
+  }
+
+  // ---------- Input ----------
+  const fields = [$('h'), $('m'), $('s')];
+  fields.forEach((el, i) => {
+    el.addEventListener('focus', () => setTimeout(() => el.select(), 0));
+    el.addEventListener('input', () => {
+      el.value = el.value.replace(/\D/g, '').slice(0, 2);
+      $('error').textContent = '';
+      if (el.value.length === 2) (i < 2 ? fields[i + 1].focus() : el.blur());
+    });
+    el.addEventListener('blur', () => { if (el.value.length === 1) el.value = '0' + el.value; });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); startCountdown(); }
+      if (e.key === 'Backspace' && el.value === '' && i > 0) fields[i - 1].focus();
+    });
+  });
+
+  function startCountdown() {
+    fields.forEach(f => { if (f.value.length === 1) f.value = '0' + f.value; });
+    const v = fields.map(f => f.value.trim());
+    if (v.some(x => !/^\d{2}$/.test(x))) { $('error').textContent = 'Fill in hours, minutes and seconds (two digits each).'; return; }
+    const [h, m, s] = v.map(Number);
+    if (h > 23 || m > 59 || s > 59) { $('error').textContent = 'Invalid time.'; return; }
+
+    const d = new Date(); d.setHours(h, m, s, 0);
+    if (d.getTime() <= Date.now()) {
+      $('error').textContent = `That time has already passed – it is now ${clock(new Date())}.`;
+      return;
+    }
+
+    // User gesture: audio, fullscreen and wake lock may be activated here
+    audioReady(); goFullscreen(); keepAwake();
+
+    target = d.getTime();
+    save(STORE.last, v.join(':'));
+    save(STORE.target, String(target));
+    scheduled.clear();
+    lastText = ''; lastLength = 0;
+    $('target').textContent = 'Start ' + clock(new Date(target));
+    showScreen('countdown');
+    tick();
+  }
+
+  function cancelCountdown() {
+    target = null;
+    save(STORE.target, null);
+    stopAudio();
+    document.body.classList.remove('flash');
+    showScreen('setup');
+  }
+
+  // ---------- Main loop ----------
+  function format(totalSec, withPlus) {
+    const h = Math.floor(totalSec / 3600), m = Math.floor(totalSec % 3600 / 60), s = totalSec % 60;
+    const t = h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+    return withPlus ? '+' + t : t;
+  }
+
+  function tick() {
+    const now = Date.now();
+    if (target === null) { $('now').textContent = clock(new Date(now)); return; }
+
+    const remaining = target - now;
+    scheduleAudio(now);
+
+    let text, cls = 'time';
+    if (remaining > 0) {
+      text = format(Math.ceil(remaining / 1000), false);
+    } else if (-remaining < START_SHOWN_MS) {
+      text = 'START!'; cls += ' go';
+    } else {
+      text = format(Math.floor(-remaining / 1000), true); cls += ' after';
+    }
+
+    const el = $('time');
+    if (text !== lastText) { el.textContent = text; lastText = text; }
+    if (el.className !== cls) el.className = cls;
+    document.body.classList.toggle('flash', cls.includes('go'));
+
+    // Scale the font so the digits fill the screen width
+    if (text.length !== lastLength) {
+      el.style.fontSize = `min(${(92 / (text.length * 0.62)).toFixed(2)}vw, 48vh)`;
+      lastLength = text.length;
+    }
+  }
+
+  // ---------- Events ----------
+  $('go').addEventListener('click', startCountdown);
+  $('wl').addEventListener('click', keepAwake);
+  $('snd').addEventListener('click', audioReady);
+  $('fs').addEventListener('click', goFullscreen);
+  $('testSound').addEventListener('click', () => {
+    audioReady();
+    if (!ctx) return;
+    (ctx.state === 'running' ? Promise.resolve() : ctx.resume()).then(() => {
+      beep(ctx.currentTime + 0.05, 0.12, 1000, 0.5);
+      beep(ctx.currentTime + 0.60, 1.0, 1500, 0.7);
+    }).catch(() => {});
+  });
+
+  // Hold "Cancel" to avoid accidents with wet fingers
+  const stopBtn = $('stop');
+  let holdTimer = null;
+  stopBtn.addEventListener('pointerdown', () => {
+    stopBtn.classList.add('holding');
+    holdTimer = setTimeout(() => { stopBtn.classList.remove('holding'); cancelCountdown(); }, 900);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => stopBtn.addEventListener(ev, () => {
+    clearTimeout(holdTimer); stopBtn.classList.remove('holding');
+  }));
+
+  // Any tap re-enables audio (Android requires a gesture, e.g. after a page reload)
+  document.addEventListener('pointerup', () => { if (!ctx || ctx.state !== 'running') audioReady(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { keepAwake(); if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {}); }
+  });
+  document.addEventListener('fullscreenchange', updateStatus);
+  document.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ---------- Startup ----------
+  const last = load(STORE.last);
+  if (last) last.split(':').forEach((v, i) => { if (fields[i]) fields[i].value = v; });
+
+  const storedTarget = Number(load(STORE.target));
+  if (storedTarget && storedTarget > Date.now() - 10 * 60 * 1000) {   // resume if the page was reloaded mid-countdown
+    target = storedTarget;
+    $('target').textContent = 'Start ' + clock(new Date(target));
+    showScreen('countdown');
+  } else {
+    save(STORE.target, null); showScreen('setup');
+  }
+
+  keepAwake();
+  updateStatus();
+  setInterval(tick, 50);
+  tick();
+
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
